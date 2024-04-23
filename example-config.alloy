@@ -1,37 +1,172 @@
-// This config file is designed to send traces and metrics to the docker
-// compose environment from example/docker-compose.
+otelcol.receiver.otlp "default" {
+	// https://grafana.com/docs/alloy/latest/reference/components/otelcol.receiver.otlp/
 
-logging {
-	level  = "debug"
-	format = "logfmt"
+	// configures the default grpc endpoint "0.0.0.0:4317"
+	grpc { }
+	// configures the default http/protobuf endpoint "0.0.0.0:4318"
+	http { }
+
+	output {
+		metrics = [otelcol.processor.resourcedetection.default.input]
+		logs    = [otelcol.processor.resourcedetection.default.input]
+		traces  = [otelcol.processor.resourcedetection.default.input]
+	}
 }
 
-tracing {
-	// Sample all traces. This value should be lower for production configs!
-	sampling_fraction = 1
+otelcol.processor.resourcedetection "default" {
+	// https://grafana.com/docs/alloy/latest/reference/components/otelcol.processor.resourcedetection/
+	detectors = ["env", "system"] // add "gcp", "ec2", "ecs", "elastic_beanstalk", "eks", "lambda", "azure", "aks", "consul", "heroku"  if you want to use cloud resource detection
 
-	write_to = [otelcol.exporter.otlp.tempo.input]
+	system {
+		hostname_sources = ["os"]
+	}
+
+	output {
+		metrics = [otelcol.processor.transform.drop_unneeded_resource_attributes.input]
+		logs    = [otelcol.processor.transform.drop_unneeded_resource_attributes.input]
+		traces  = [otelcol.processor.transform.drop_unneeded_resource_attributes.input]
+	}
 }
 
-otelcol.exporter.otlp "tempo" {
-	client {
-		endpoint = "localhost:4317"
+otelcol.processor.transform "drop_unneeded_resource_attributes" {
+	// https://grafana.com/docs/alloy/latest/reference/components/otelcol.processor.transform/
+	error_mode = "ignore"
 
-		tls {
-			insecure = true
+	trace_statements {
+		context    = "resource"
+		statements = [
+			"delete_key(attributes, \"k8s.pod.start_time\")",
+			"delete_key(attributes, \"os.description\")",
+			"delete_key(attributes, \"os.type\")",
+			"delete_key(attributes, \"process.command_args\")",
+			"delete_key(attributes, \"process.executable.path\")",
+			"delete_key(attributes, \"process.pid\")",
+			"delete_key(attributes, \"process.runtime.description\")",
+			"delete_key(attributes, \"process.runtime.name\")",
+			"delete_key(attributes, \"process.runtime.version\")",
+		]
+	}
+
+	metric_statements {
+		context    = "resource"
+		statements = [
+			"delete_key(attributes, \"k8s.pod.start_time\")",
+			"delete_key(attributes, \"os.description\")",
+			"delete_key(attributes, \"os.type\")",
+			"delete_key(attributes, \"process.command_args\")",
+			"delete_key(attributes, \"process.executable.path\")",
+			"delete_key(attributes, \"process.pid\")",
+			"delete_key(attributes, \"process.runtime.description\")",
+			"delete_key(attributes, \"process.runtime.name\")",
+			"delete_key(attributes, \"process.runtime.version\")",
+		]
+	}
+
+	log_statements {
+		context    = "resource"
+		statements = [
+			"delete_key(attributes, \"k8s.pod.start_time\")",
+			"delete_key(attributes, \"os.description\")",
+			"delete_key(attributes, \"os.type\")",
+			"delete_key(attributes, \"process.command_args\")",
+			"delete_key(attributes, \"process.executable.path\")",
+			"delete_key(attributes, \"process.pid\")",
+			"delete_key(attributes, \"process.runtime.description\")",
+			"delete_key(attributes, \"process.runtime.name\")",
+			"delete_key(attributes, \"process.runtime.version\")",
+		]
+	}
+
+	output {
+		metrics = [otelcol.processor.transform.add_resource_attributes_as_metric_attributes.input]
+		logs    = [otelcol.processor.batch.default.input]
+		traces  = [
+			otelcol.processor.batch.default.input,
+			otelcol.connector.host_info.default.input,
+		]
+	}
+}
+
+otelcol.connector.host_info "default" {
+	// https://grafana.com/docs/alloy/latest/reference/components/otelcol.connector.host_info/
+	host_identifiers = ["host.name"]
+
+	output {
+		metrics = [otelcol.processor.batch.default.input]
+	}
+}
+
+otelcol.processor.transform "add_resource_attributes_as_metric_attributes" {
+	// https://grafana.com/docs/alloy/latest/reference/components/otelcol.processor.transform/
+	error_mode = "ignore"
+
+	metric_statements {
+		context    = "datapoint"
+		statements = [
+			"set(attributes[\"deployment.environment\"], resource.attributes[\"deployment.environment\"])",
+			"set(attributes[\"service.version\"], resource.attributes[\"service.version\"])",
+		]
+	}
+
+	output {
+		metrics = [otelcol.processor.batch.default.input]
+	}
+}
+
+otelcol.processor.batch "default" {
+	// https://grafana.com/docs/alloy/latest/reference/components/otelcol.processor.batch/
+	output {
+		metrics = [otelcol.exporter.prometheus.grafana_cloud_prometheus.input]
+		logs    = [otelcol.exporter.loki.grafana_cloud_loki.input]
+		traces  = [otelcol.exporter.otlp.grafana_cloud_tempo.input]
+	}
+}
+
+otelcol.exporter.loki "grafana_cloud_loki" {
+	// https://grafana.com/docs/alloy/latest/reference/components/otelcol.exporter.loki/
+	forward_to = [loki.write.grafana_cloud_loki.receiver]
+}
+
+otelcol.exporter.prometheus "grafana_cloud_prometheus" {
+	// https://grafana.com/docs/alloy/latest/reference/components/otelcol.exporter.prometheus/
+	add_metric_suffixes = false
+	forward_to          = [prometheus.remote_write.grafana_cloud_prometheus.receiver]
+}
+
+prometheus.remote_write "grafana_cloud_prometheus" {
+	// https://grafana.com/docs/alloy/latest/reference/components/prometheus.remote_write/
+	endpoint {
+		url = env("GRAFANA_CLOUD_PROMETHEUS_URL")
+
+		basic_auth {
+			username = env("GRAFANA_CLOUD_PROMETHEUS_USERNAME")
+			password = env("GRAFANA_CLOUD_API_KEY")
 		}
 	}
 }
 
-prometheus.exporter.unix "default" { /* use defaults */ }
+loki.write "grafana_cloud_loki" {
+	// https://grafana.com/docs/alloy/latest/reference/components/loki.write/
+	endpoint {
+		url = env("GRAFANA_CLOUD_LOKI_URL")
 
-prometheus.scrape "default" {
-	targets    = prometheus.exporter.unix.default.targets
-	forward_to = [prometheus.remote_write.default.receiver]
+		basic_auth {
+			username = env("GRAFANA_CLOUD_LOKI_USERNAME")
+			password = env("GRAFANA_CLOUD_API_KEY")
+		}
+	}
 }
 
-prometheus.remote_write "default" {
-	endpoint {
-		url = "http://localhost:9009/api/prom/push"
+otelcol.exporter.otlp "grafana_cloud_tempo" {
+	// https://grafana.com/docs/alloy/latest/reference/components/otelcol.exporter.otlp/
+	client {
+		endpoint = env("GRAFANA_CLOUD_TEMPO_ENDPOINT")
+		auth     = otelcol.auth.basic.grafana_cloud_tempo.handler
 	}
+}
+
+otelcol.auth.basic "grafana_cloud_tempo" {
+	// https://grafana.com/docs/alloy/latest/reference/components/otelcol.auth.basic/
+	username = env("GRAFANA_CLOUD_TEMPO_USERNAME")
+	password = env("GRAFANA_CLOUD_API_KEY")
 }
