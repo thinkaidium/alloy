@@ -26,3 +26,7 @@ cover*.out
 node_modules
 
 /docs/variables.mk.local
+
+
+aidium-alloy
+build.sh
